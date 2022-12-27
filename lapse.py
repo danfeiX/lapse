@@ -1,4 +1,6 @@
 import os
+import sys
+import signal
 from PIL import Image
 import argparse
 from datetime import datetime
@@ -9,6 +11,11 @@ import ffmpeg
 SHOULD_EXIT = False
 
 
+def signal_handler(sig, frame):
+    global SHOULD_EXIT
+    SHOULD_EXIT = True
+
+
 def capture(target_filename, scale=0.5, quality=85):
     os.system("screencapture {}".format(target_filename + ".png"))
     im = Image.open(target_filename + ".png")
@@ -17,7 +24,6 @@ def capture(target_filename, scale=0.5, quality=85):
     im = im.convert("RGB")
     im.save(target_filename + ".jpg", quality=quality)
     os.remove(target_filename + ".png")
-    print("capture to {}".format(target_filename))
 
 
 def dump_video(image_dir, video_filename, fps):
@@ -26,7 +32,7 @@ def dump_video(image_dir, video_filename, fps):
         ffmpeg
         .input(image_dir + "/*.jpg", pattern_type="glob", framerate=fps)
         .output(video_filename)
-        .run()
+        .run(quiet=True)
     )
 
 
@@ -46,10 +52,12 @@ if __name__ == "__main__":
     parser.add_argument("--scale", type=float, default=0.4, help="Image scale wrt the original resolution")
     parser.add_argument("--compress_quality", type=int, default=85, help="JPEG compression quality")
     parser.add_argument("--capture_rate", type=float, default=1, help="Screen capture frequency in hz")
-    parser.add_argument("--video_interval", type=float, default=3600, help="How long to wait before dumping a video")
+    parser.add_argument("--video_interval", type=float, default=1800, help="How long to wait before dumping a video")
     parser.add_argument("--video_fps", type=int, default=10, help="FPS of the saved video")
     parser.add_argument("--keep_images", action="store_true", default=False, help="Whether to keep the original image files after dumping video")
     args = parser.parse_args()
+
+    signal.signal(signal.SIGINT, signal_handler)
 
     iter_interval = 1 / args.capture_rate
 
@@ -57,21 +65,23 @@ if __name__ == "__main__":
     start_time = time.time()
     image_counter = 0
 
-    while not SHOULD_EXIT:
+    while True:
         curr_iter_time = time.time()
         
         if curr_im_dir is None:
             curr_im_dir = get_image_dir(args.lapse_root_dir)
 
-        capture(
-            curr_im_dir + "/" + str(image_counter).zfill(6),
-            scale=args.scale,
-            quality=args.compress_quality
-        )
+        try:
+            capture(
+                curr_im_dir + "/" + str(image_counter).zfill(6),
+                scale=args.scale,
+                quality=args.compress_quality
+            )
+            image_counter += 1
+        except Exception as e:
+            print(e)
 
-        image_counter += 1
-
-        if time.time() - start_time > args.video_interval:
+        if time.time() - start_time > args.video_interval or SHOULD_EXIT:
             dump_video(curr_im_dir, curr_im_dir.rstrip("/") + ".mp4", args.video_fps)
 
             if not args.keep_images:
@@ -80,6 +90,9 @@ if __name__ == "__main__":
             image_counter = 0
             start_time = time.time()
             curr_im_dir = None
+
+        if SHOULD_EXIT:
+            sys.exit(0)
 
         time_to_sleep = iter_interval - (time.time() - curr_iter_time)
         if time_to_sleep > 0:
